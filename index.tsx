@@ -39,6 +39,13 @@ const styles = {
     marginBottom: '20px',
     border: '1px solid var(--border-color)',
   },
+  configContainer: {
+    backgroundColor: 'var(--bg-panel)',
+    borderRadius: '8px',
+    padding: '10px',
+    marginBottom: '20px',
+    border: '1px solid var(--border-color)',
+  },
   keyItem: {
     backgroundColor: 'var(--bg-dark)',
     padding: '8px',
@@ -142,6 +149,7 @@ const styles = {
   },
   tab: (active: boolean) => ({
     padding: '10px 16px',
+    paddingRight: '28px', // Make space for close button
     borderRadius: '8px 8px 0 0',
     cursor: 'pointer',
     backgroundColor: active ? 'var(--bg-panel)' : '#222',
@@ -156,7 +164,25 @@ const styles = {
     alignItems: 'flex-start',
     minWidth: '140px',
     position: 'relative' as const,
+    userSelect: 'none' as const,
   }),
+  tabCloseBtn: {
+    position: 'absolute' as const,
+    top: '4px',
+    right: '4px',
+    width: '18px',
+    height: '18px',
+    borderRadius: '50%',
+    backgroundColor: 'transparent',
+    color: '#aaa',
+    border: 'none',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    fontSize: '12px',
+    lineHeight: 1,
+  },
   tableContainer: {
     flex: 1,
     overflow: 'auto',
@@ -261,6 +287,22 @@ interface SearchHistoryItem {
     data: VideoResult[];
 }
 
+interface AppConfig {
+    apiKeys: ApiKeyData[];
+    keywordInput: string;
+    channelInput: string;
+    filters: {
+        days: number;
+        duration: string;
+        minDurationMin: number | '';
+        maxDurationMin: number | '';
+        minViews: number;
+        minViewsPerHour: number;
+        regionCode: string;
+        lang: string;
+    }
+}
+
 type ViewMode = 'search' | 'results';
 type SearchMode = 'keyword' | 'channel';
 
@@ -302,6 +344,7 @@ function App() {
   const [sortAsc, setSortAsc] = useState(false);
 
   const logEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Init & Load Saved Data
   useEffect(() => {
@@ -454,6 +497,68 @@ function App() {
           return clone;
       });
   };
+
+  // --- Configuration Export / Import ---
+  const handleExportConfig = () => {
+    const config: AppConfig = {
+        apiKeys,
+        keywordInput,
+        channelInput,
+        filters: {
+            days,
+            duration,
+            minDurationMin,
+            maxDurationMin,
+            minViews,
+            minViewsPerHour,
+            regionCode,
+            lang
+        }
+    };
+    
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `yt_config_${new Date().toISOString().slice(0,10)}.json`;
+    link.click();
+    addLog('설정(API키, 키워드 등) 내보내기 완료', 'success');
+  };
+
+  const handleImportConfig = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        try {
+            const config = JSON.parse(event.target?.result as string) as AppConfig;
+            
+            if (config.apiKeys) setApiKeys(config.apiKeys);
+            if (config.keywordInput !== undefined) setKeywordInput(config.keywordInput);
+            if (config.channelInput !== undefined) setChannelInput(config.channelInput);
+            
+            if (config.filters) {
+                setDays(config.filters.days);
+                setDuration(config.filters.duration);
+                setMinDurationMin(config.filters.minDurationMin);
+                setMaxDurationMin(config.filters.maxDurationMin);
+                setMinViews(config.filters.minViews);
+                setMinViewsPerHour(config.filters.minViewsPerHour);
+                setRegionCode(config.filters.regionCode);
+                setLang(config.filters.lang);
+            }
+            
+            addLog('설정 파일 불러오기 성공', 'success');
+        } catch (err) {
+            addLog('설정 파일 형식이 올바르지 않습니다.', 'error');
+            console.error(err);
+        }
+        // Reset file input
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+    reader.readAsText(file);
+  };
+
 
   // --- Core API Logic with Rotation ---
   const apiCall = async (endpoint: string, params: Record<string, any>): Promise<any> => {
@@ -711,7 +816,7 @@ function App() {
     } finally {
       setLoading(false);
       
-      // Save to History (Even if partial)
+      // Save to History
       if (sessionResults.length > 0) {
           const timestamp = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
           const firstKey = inputs[0].length > 8 ? inputs[0].substring(0,8)+'...' : inputs[0];
@@ -727,7 +832,7 @@ function App() {
           
           setSearchHistory(prev => {
               const newHistory = [historyItem, ...prev];
-              return newHistory.slice(0, 5); // Keep last 5
+              return newHistory.slice(0, 10); // LIMIT INCREASED TO 10
           });
           setActiveHistoryId(historyItem.id);
       }
@@ -737,6 +842,15 @@ function App() {
   const handleHistoryClick = (item: SearchHistoryItem) => {
       setActiveHistoryId(item.id);
       setResults(item.data);
+  };
+
+  const handleDeleteHistory = (e: React.MouseEvent, id: number) => {
+      e.stopPropagation(); // Stop tab click event
+      setSearchHistory(prev => prev.filter(item => item.id !== id));
+      if (activeHistoryId === id) {
+          setResults([]);
+          setActiveHistoryId(null);
+      }
   };
 
   const handleExport = () => {
@@ -848,6 +962,26 @@ function App() {
                 ))}
                 {apiKeys.length === 0 && <div style={{fontSize:'0.8rem', color:'#666', textAlign:'center'}}>등록된 키가 없습니다.</div>}
             </div>
+        </div>
+
+        {/* Configuration Manager (Export/Import) */}
+        <div style={styles.configContainer}>
+             <label style={styles.label}>데이터 관리 (키, 설정, 필터)</label>
+             <div style={{display:'flex', gap:'5px', flexWrap:'wrap'}}>
+                <button className="btn btn-sm" style={{flex:1}} onClick={handleExportConfig}>
+                   💾 내보내기
+                </button>
+                <button className="btn btn-sm" style={{flex:1}} onClick={() => fileInputRef.current?.click()}>
+                   📂 불러오기
+                </button>
+                <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    style={{display:'none'}} 
+                    accept=".json"
+                    onChange={handleImportConfig}
+                />
+             </div>
         </div>
 
         <nav>
@@ -998,7 +1132,15 @@ function App() {
                             key={item.id} 
                             style={styles.tab(activeHistoryId === item.id)}
                             onClick={() => handleHistoryClick(item)}
+                            title="클릭하여 결과 보기"
                         >
+                            <button 
+                                style={styles.tabCloseBtn}
+                                onClick={(e) => handleDeleteHistory(e, item.id)}
+                                title="이 기록 삭제"
+                            >
+                                &#10005;
+                            </button>
                             <div style={{fontSize:'0.7rem', color:'var(--accent-color)'}}>{item.timestamp}</div>
                             <div style={{whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', width:'100%'}}>
                                 {item.keywordSummary}
