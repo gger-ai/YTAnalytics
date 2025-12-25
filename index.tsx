@@ -667,32 +667,67 @@ function App() {
     }
   };
 
+  // --- 지능형 확장 쿼리 생성 엔진 ---
+  const getExpandedQuery = (text: string): string => {
+    // 1. 전처리: 조사 제거 및 특수문자 정규화
+    let clean = text
+      .replace(/[은는이가을를로의과와도만께에게한테]/g, ' ')
+      .replace(/[|ㅣ\[\]:：!?;~…\(\)]/g, ' ')
+      .replace(/\.{2,}/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // 2. 의미 확장 맵 (Semantic Expansion Map)
+    const expansionMap: Record<string, string> = {
+      '엄마': '(엄마|아빠|부모|어머니|아버지|부모님)',
+      '아빠': '(엄마|아빠|부모|어머니|아버지|부모님)',
+      '어머니': '(엄마|아빠|부모|어머니|아버지|부모님)',
+      '아버지': '(엄마|아빠|부모|어머니|아버지|부모님)',
+      '딸': '(딸|아들|자식|남매|아이들|애들)',
+      '아들': '(딸|아들|자식|남매|아이들|애들)',
+      '남매': '(남매|자매|형제|아이들|애들)',
+      '자매': '(남매|자매|형제|아이들|애들)',
+      '형제': '(남매|자매|형제|아이들|애들)',
+      '죽은': '(죽은|돌아가신|사망|떠난|하늘나라|세상떠난)',
+      '돌아가신': '(죽은|돌아가신|사망|떠난|하늘나라|세상떠난)',
+      '재벌': '(재벌|회장|부자|백만장자)',
+      '회장': '(재벌|회장|부자|백만장자)',
+      '벤츠': '(벤츠|승용차|차|자동차|고급차)',
+      '결제': '(결제|계산|카드|통장|돈)',
+      '카드': '(결제|계산|카드|통장|돈)',
+      '고아': '(고아|부모없는|혼자남겨진|아이들)',
+    };
+
+    // 3. 쿼리 구성
+    const words = clean.split(' ').filter(w => w.length >= 2); // 2글자 이상 핵심어만 추출
+    const expandedWords = words.map(word => {
+      // 맵에 있는 단어면 확장하고, 아니면 그대로 사용
+      for (const key in expansionMap) {
+        if (word.includes(key)) return expansionMap[key];
+      }
+      return word;
+    });
+
+    // 중복 제거 및 최종 쿼리 생성 (AND 조건으로 결합)
+    return Array.from(new Set(expandedWords)).slice(0, 8).join(' '); // API 제한 고려 최대 8개 그룹
+  };
+
   const handleFindRelated = async (video: VideoResult) => {
     if (apiKeys.length === 0) { alert('API Key를 먼저 등록하세요.'); return; }
     setLoading(true);
     setCurrentView('related');
     setRelatedResults([]);
     setActiveRelatedId(null);
-    addLog(`[연관 동영상 찾기] '${video.title}' 분석 기반 검색 최적화 중...`, 'info');
     
-    // 유튜브 UI와 동일한 결과를 내기 위한 지능형 쿼리 정규화
-    // 1. 특수 구분자 기준으로 제목 자르기 (| , ㅣ , [ , : )
-    // 2. 불필요한 태그/연속 마침표 제거
-    // 3. 핵심 서사 구문만 추출하여 광범위 매칭 유도
-    const baseTitle = video.title.split(/[|ㅣ\[:：]/)[0].trim();
-    const cleanQuery = baseTitle
-        .replace(/\.{2,}/g, ' ') // ".." 제거
-        .replace(/\s+/g, ' ') // 중복 공백 제거
-        .trim();
-
-    // 쿼리가 너무 길면 뒤쪽 서술어를 살짝 쳐내어 검색 범위를 넓힘 (엄마카드 -> 아빠카드 등 변주를 잡기 위함)
-    const finalQuery = cleanQuery.length > 50 ? cleanQuery.substring(0, 50) : cleanQuery;
+    // 지능형 확장 쿼리 생성
+    const expandedQuery = getExpandedQuery(video.title);
+    addLog(`[연관 동영상 찾기] 분석 기반 확장 쿼리 생성 완료.`, 'info');
+    addLog(`[최적화 쿼리] ${expandedQuery}`, 'info');
 
     try {
-        addLog(`[검색어 최적화] '${finalQuery}' 키워드로 광범위 검색을 시도합니다.`, 'info');
         const data = await apiCall('search', { 
             part: 'snippet', 
-            q: finalQuery, 
+            q: expandedQuery, 
             type: 'video', 
             maxResults: 50, 
             order: 'relevance',
@@ -709,16 +744,16 @@ function App() {
             const channelMap: Record<string, any> = {};
             cRes.items.forEach((c: any) => channelMap[c.id] = c.statistics);
             
-            // isRelatedMode=true: 모든 성능 필터링을 우회하여 유튜브 검색 결과에 나온 모든 연관 영상을 표시
+            // isRelatedMode=true: 모든 성능 필터링 무회
             const processed = processData(videos, channelMap, true);
             setRelatedResults(processed);
             
             const timestamp = new Date().toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/\. /g, '.');
-            const summary = `연관찾기: ${finalQuery.slice(0, 15)}...`;
+            const summary = `연관: ${video.title.slice(0, 15)}...`;
             const historyItem: SearchHistoryItem = { id: Date.now(), timestamp, keywordSummary: summary, totalResults: processed.length, data: processed };
             setRelatedHistory(prev => [historyItem, ...prev].slice(0, 10));
             setActiveRelatedId(historyItem.id);
-            addLog(`[연관 동영상 찾기] 완료 (총 ${processed.length}개 연관 영상 검색됨)`, 'success');
+            addLog(`[연관 동영상 찾기] 수집 완료 (총 ${processed.length}개 결과)`, 'success');
         } else { addLog(`[연관 동영상 찾기] 검색 결과가 없습니다.`, 'warn'); }
     } catch (e: any) { addLog(`[연관 동영상 찾기] 오류: ${e.message}`, 'error'); } finally { setLoading(false); }
   };
@@ -744,12 +779,9 @@ function App() {
       return [...data].sort((a, b) => {
           let valA = a[sortCol];
           let valB = b[sortCol];
-
           if (typeof valA === 'string' && typeof valB === 'string') {
-              const res = sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
-              return res;
+              return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
           }
-          
           if (valA < valB) return sortAsc ? -1 : 1;
           if (valA > valB) return sortAsc ? 1 : -1;
           return 0;
