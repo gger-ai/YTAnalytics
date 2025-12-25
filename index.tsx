@@ -22,6 +22,7 @@ const styles = {
     overflowY: 'auto' as const,
     opacity: isOpen ? 1 : 0,
     whiteSpace: 'nowrap' as const,
+    position: 'relative' as const,
   }),
   brand: {
     fontSize: '1.4rem',
@@ -216,10 +217,12 @@ const styles = {
     borderBottom: '1px solid var(--border-color)',
   },
   thumbnail: {
-    width: '80px',
-    height: '45px',
+    width: '100px',
+    height: '56px',
     objectFit: 'cover' as const,
     borderRadius: '4px',
+    cursor: 'zoom-in',
+    transition: 'transform 0.2s',
   },
   toggleButton: {
     position: 'absolute' as const,
@@ -247,6 +250,49 @@ const styles = {
     color: 'var(--text-muted)',
     marginBottom: '8px',
   },
+  versionFooter: {
+    marginTop: 'auto',
+    paddingTop: '20px',
+    fontSize: '0.75rem',
+    color: 'var(--text-muted)',
+    textAlign: 'left' as const,
+    borderTop: '1px solid var(--border-color)',
+  },
+  modal: {
+    position: 'fixed' as const,
+    top: 0,
+    left: 0,
+    width: '100vw',
+    height: '100vh',
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    zIndex: 1000,
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '40px',
+  },
+  modalContent: {
+    position: 'relative' as const,
+    maxWidth: '90%',
+    maxHeight: '80%',
+  },
+  modalImage: {
+    width: '100%',
+    height: 'auto',
+    borderRadius: '8px',
+    boxShadow: '0 0 30px rgba(0,0,0,0.5)',
+  },
+  modalClose: {
+    position: 'absolute' as const,
+    top: '-30px',
+    right: '-30px',
+    backgroundColor: 'transparent',
+    color: 'white',
+    border: 'none',
+    fontSize: '24px',
+    cursor: 'pointer',
+  }
 };
 
 // --- Types ---
@@ -308,6 +354,7 @@ type ViewMode = 'search' | 'results' | 'related';
 type SearchMode = 'keyword' | 'channel';
 
 const QUOTA_LIMIT = 10000;
+const APP_VERSION = "최근 업데이트: 2024.12.24 v2.1.0";
 
 // --- Main App Component ---
 function App() {
@@ -336,13 +383,16 @@ function App() {
   const [relatedHistory, setRelatedHistory] = useState<SearchHistoryItem[]>([]);
   const [activeRelatedId, setActiveRelatedId] = useState<number | null>(null);
 
-  // Sorting State
-  const [sortCol, setSortCol] = useState<keyof VideoResult>('viewCount');
+  // Sorting State - Default: Views per Hour (시간당 조회수) Descending
+  const [sortCol, setSortCol] = useState<keyof VideoResult>('viewsPerHour');
   const [sortAsc, setSortAsc] = useState(false);
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   
+  // Modal for Thumbnail
+  const [selectedImg, setSelectedImg] = useState<string | null>(null);
+
   const [days, setDays] = useState(10);
   const [duration, setDuration] = useState('long'); 
   const [minDurationMin, setMinDurationMin] = useState<number | ''>(60);
@@ -561,7 +611,6 @@ function App() {
       const stats = v.statistics || {};
       const viewCount = parseInt(stats.viewCount) || 0;
       
-      // '연관 동영상 찾기'에서는 모든 성능 필터를 해제하여 유튜브 검색과 동일한 결과를 보장
       if (!isRelatedMode) {
           if (viewCount < minViews) return null;
       }
@@ -667,14 +716,15 @@ function App() {
     }
   };
 
-  // --- 지능형 확장 쿼리 생성 엔진 ---
+  // --- 한국어 의미 분석 및 확장 쿼리 생성 엔진 ---
   const getExpandedQuery = (text: string): string => {
-    // 1. 전처리: 조사 제거 및 특수문자 정규화
+    // 1. 전처리: 조사 및 불필요한 감탄사/구어체 어미 제거
     let clean = text
-      .replace(/[은는이가을를로의과와도만께에게한테]/g, ' ')
-      .replace(/[|ㅣ\[\]:：!?;~…\(\)]/g, ' ')
-      .replace(/\.{2,}/g, ' ')
-      .replace(/\s+/g, ' ')
+      .replace(/[은는이가을를로의과와도만께에게한테]/g, ' ') // 조사 제거
+      .replace(/[ㅠㅜㅋㅎ!?~…\(\)]/g, ' ') // 감탄사 제거
+      .replace(/(진짜|정말|근데|하는데|했는데|했더니)/g, ' ') // 구어체 노이즈 제거
+      .replace(/[|ㅣ\[\]:：]/g, ' ') // 특수 구분자 제거
+      .replace(/\s+/g, ' ') // 중복 공백 정규화
       .trim();
 
     // 2. 의미 확장 맵 (Semantic Expansion Map)
@@ -683,6 +733,7 @@ function App() {
       '아빠': '(엄마|아빠|부모|어머니|아버지|부모님)',
       '어머니': '(엄마|아빠|부모|어머니|아버지|부모님)',
       '아버지': '(엄마|아빠|부모|어머니|아버지|부모님)',
+      '부모': '(엄마|아빠|부모|어머니|아버지|부모님)',
       '딸': '(딸|아들|자식|남매|아이들|애들)',
       '아들': '(딸|아들|자식|남매|아이들|애들)',
       '남매': '(남매|자매|형제|아이들|애들)',
@@ -690,26 +741,26 @@ function App() {
       '형제': '(남매|자매|형제|아이들|애들)',
       '죽은': '(죽은|돌아가신|사망|떠난|하늘나라|세상떠난)',
       '돌아가신': '(죽은|돌아가신|사망|떠난|하늘나라|세상떠난)',
+      '사망': '(죽은|돌아가신|사망|떠난|하늘나라|세상떠난)',
       '재벌': '(재벌|회장|부자|백만장자)',
       '회장': '(재벌|회장|부자|백만장자)',
       '벤츠': '(벤츠|승용차|차|자동차|고급차)',
-      '결제': '(결제|계산|카드|통장|돈)',
-      '카드': '(결제|계산|카드|통장|돈)',
+      '결제': '(결제|계산|카드|통장|돈|유품)',
+      '카드': '(결제|계산|카드|통장|돈|유품)',
       '고아': '(고아|부모없는|혼자남겨진|아이들)',
     };
 
-    // 3. 쿼리 구성
-    const words = clean.split(' ').filter(w => w.length >= 2); // 2글자 이상 핵심어만 추출
-    const expandedWords = words.map(word => {
-      // 맵에 있는 단어면 확장하고, 아니면 그대로 사용
+    // 3. 핵심어 추출 및 확장 (2글자 이상 핵심 명사 위주)
+    const rawWords = clean.split(' ').filter(w => w.length >= 2);
+    const expandedGroups = rawWords.map(word => {
       for (const key in expansionMap) {
         if (word.includes(key)) return expansionMap[key];
       }
       return word;
     });
 
-    // 중복 제거 및 최종 쿼리 생성 (AND 조건으로 결합)
-    return Array.from(new Set(expandedWords)).slice(0, 8).join(' '); // API 제한 고려 최대 8개 그룹
+    // 중복 제거 및 최종 쿼리 생성 (AND 조건)
+    return Array.from(new Set(expandedGroups)).slice(0, 8).join(' ');
   };
 
   const handleFindRelated = async (video: VideoResult) => {
@@ -719,9 +770,8 @@ function App() {
     setRelatedResults([]);
     setActiveRelatedId(null);
     
-    // 지능형 확장 쿼리 생성
     const expandedQuery = getExpandedQuery(video.title);
-    addLog(`[연관 동영상 찾기] 분석 기반 확장 쿼리 생성 완료.`, 'info');
+    addLog(`[연관 동영상 찾기] 지능형 확장 쿼리 생성 완료.`, 'info');
     addLog(`[최적화 쿼리] ${expandedQuery}`, 'info');
 
     try {
@@ -744,7 +794,7 @@ function App() {
             const channelMap: Record<string, any> = {};
             cRes.items.forEach((c: any) => channelMap[c.id] = c.statistics);
             
-            // isRelatedMode=true: 모든 성능 필터링 무회
+            // isRelatedMode=true: 필터 전면 해제
             const processed = processData(videos, channelMap, true);
             setRelatedResults(processed);
             
@@ -753,7 +803,7 @@ function App() {
             const historyItem: SearchHistoryItem = { id: Date.now(), timestamp, keywordSummary: summary, totalResults: processed.length, data: processed };
             setRelatedHistory(prev => [historyItem, ...prev].slice(0, 10));
             setActiveRelatedId(historyItem.id);
-            addLog(`[연관 동영상 찾기] 수집 완료 (총 ${processed.length}개 결과)`, 'success');
+            addLog(`[연관 동영상 찾기] 분석 완료 (총 ${processed.length}개 결과)`, 'success');
         } else { addLog(`[연관 동영상 찾기] 검색 결과가 없습니다.`, 'warn'); }
     } catch (e: any) { addLog(`[연관 동영상 찾기] 오류: ${e.message}`, 'error'); } finally { setLoading(false); }
   };
@@ -794,11 +844,20 @@ function App() {
   const handleExport = (data: VideoResult[]) => {
     if (data.length === 0) return;
     const sortedExport = getSortedData(data);
-    const headers = ['제목', '채널명', '조회수', '시간당', '좋아요', '구독자', '비율', '길이', '게시일', '링크'];
+    const headers = ['제목', '채널명', '조회수', '시간당 조회수', '좋아요', '구독자', '비율', '길이', '게시일', '링크'];
     let csv = "\uFEFF" + headers.join(',') + '\n';
-    sortedExport.forEach(row => { csv += [`"${row.title.replace(/"/g, '""')}"`, `"${row.channelTitle.replace(/"/g, '""')}"`, row.viewCount, Math.round(row.viewsPerHour), row.likeCount, row.subscriberCount, row.viewSubRatio.toFixed(2), row.duration, row.publishedAt.split('T')[0], row.link].join(',') + '\n'; });
+    sortedExport.forEach(row => { csv += [`"${row.title.replace(/"/g, '""')}"`, `"${row.channelTitle.replace(/"/g, '""')}"`, row.viewCount, Math.round(row.viewsPerHour), row.likeCount, row.subscriberCount, row.viewSubRatio.toFixed(2), row.duration, row.publishedAt.replace('T', ' ').split('.')[0], row.link].join(',') + '\n'; });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = `yt_report_${Date.now()}.csv`; link.click();
+  };
+
+  const handleDownloadImg = (url: string, title: string) => {
+    fetch(url).then(r => r.blob()).then(blob => {
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `thumbnail_${title.slice(0, 20)}.jpg`;
+        link.click();
+    });
   };
 
   const renderTable = (data: VideoResult[], activeId: number | null) => (
@@ -810,7 +869,7 @@ function App() {
                 <th style={styles.th(true)} onClick={() => handleSort('title')}>제목 {sortCol === 'title' ? (sortAsc ? '▲' : '▼') : ''}</th>
                 <th style={styles.th(true)} onClick={() => handleSort('channelTitle')}>채널 {sortCol === 'channelTitle' ? (sortAsc ? '▲' : '▼') : ''}</th>
                 <th style={styles.th(true)} onClick={() => handleSort('viewCount')}>조회수 {sortCol === 'viewCount' ? (sortAsc ? '▲' : '▼') : ''}</th>
-                <th style={styles.th(true)} onClick={() => handleSort('viewsPerHour')}>시간당 {sortCol === 'viewsPerHour' ? (sortAsc ? '▲' : '▼') : ''}</th>
+                <th style={styles.th(true)} onClick={() => handleSort('viewsPerHour')}>시간당 조회수 {sortCol === 'viewsPerHour' ? (sortAsc ? '▲' : '▼') : ''}</th>
                 <th style={styles.th(true)} onClick={() => handleSort('subscriberCount')}>구독자 {sortCol === 'subscriberCount' ? (sortAsc ? '▲' : '▼') : ''}</th>
                 <th style={styles.th(true)} onClick={() => handleSort('viewSubRatio')}>비율 {sortCol === 'viewSubRatio' ? (sortAsc ? '▲' : '▼') : ''}</th>
                 <th style={styles.th(true)} onClick={() => handleSort('durationSec')}>길이 {sortCol === 'durationSec' ? (sortAsc ? '▲' : '▼') : ''}</th>
@@ -818,9 +877,9 @@ function App() {
             </tr>
         </thead>
         <tbody>{data.map((row, i) => (
-            <tr key={`${activeId}-${row.id}-${i}`}>
+            <tr key={`${activeId}-${row.id}-${i}`} style={{backgroundColor: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)'}}>
                 <td style={styles.td}>{i+1}</td>
-                <td style={styles.td}><img src={row.thumbnail} style={styles.thumbnail}/></td>
+                <td style={styles.td}><img src={row.thumbnail} style={styles.thumbnail} onClick={() => setSelectedImg(row.thumbnail)} title="클릭하여 확대"/></td>
                 <td style={styles.td}>
                     <div style={{display:'flex', flexDirection:'column', gap:'4px'}}>
                         <a href={row.link} target="_blank" style={{color: 'var(--text-main)', textDecoration: 'none', fontWeight:'500'}}>{row.title}</a>
@@ -833,7 +892,7 @@ function App() {
                 <td style={styles.td}>{row.subscriberCount.toLocaleString()}</td>
                 <td style={styles.td}>{row.viewSubRatio.toFixed(1)}%</td>
                 <td style={styles.td}><span className="badge">{row.duration}</span></td>
-                <td style={styles.td}>{new Date(row.publishedAt).toLocaleDateString()}</td>
+                <td style={{...styles.td, fontSize: '0.8rem'}}>{new Date(row.publishedAt).toLocaleString('ko-KR', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' })}</td>
             </tr>
         ))}</tbody>
     </table>
@@ -841,6 +900,20 @@ function App() {
 
   return (
     <div style={styles.container}>
+      {/* Thumbnail Enlargement Modal */}
+      {selectedImg && (
+        <div style={styles.modal} onClick={() => setSelectedImg(null)}>
+            <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
+                <button style={styles.modalClose} onClick={() => setSelectedImg(null)}>✕</button>
+                <img src={selectedImg} style={styles.modalImage} />
+                <div style={{marginTop:'20px', display:'flex', gap:'10px', justifyContent:'center'}}>
+                    <button className="btn btn-success" onClick={() => handleDownloadImg(selectedImg, "youtube_thumb")}>이미지 다운로드</button>
+                    <button className="btn" onClick={() => setSelectedImg(null)}>닫기</button>
+                </div>
+            </div>
+        </div>
+      )}
+
       <aside style={styles.sidebar(sidebarOpen)}>
         <div style={styles.brand}>📊 YT Analytics PRO</div>
         
@@ -877,9 +950,13 @@ function App() {
         <nav>
           <div style={styles.navItem(currentView === 'search' && searchMode === 'keyword')} onClick={() => { setCurrentView('search'); setSearchMode('keyword'); }}>🔍 키워드 검색</div>
           <div style={styles.navItem(currentView === 'search' && searchMode === 'channel')} onClick={() => { setCurrentView('search'); setSearchMode('channel'); }}>📺 채널 분석</div>
-          <div style={styles.navItem(currentView === 'results')} onClick={() => setCurrentView('results')}>📂 키워드, 채널 검색결과 ({searchHistory.length})</div>
+          <div style={styles.navItem(currentView === 'results')} onClick={() => setCurrentView('results')}>📂 검색결과 ({searchHistory.length})</div>
           <div style={styles.navItem(currentView === 'related')} onClick={() => setCurrentView('related')}>🏆 연관동영상찾기 ({relatedHistory.length})</div>
         </nav>
+
+        <div style={styles.versionFooter}>
+            {APP_VERSION}
+        </div>
       </aside>
 
       <main style={styles.mainContent}>
@@ -894,7 +971,7 @@ function App() {
                         <div style={{display:'flex', gap:'4px'}}><select value={duration} onChange={e => setDuration(e.target.value)} style={{flex:1.5}}><option value="any">전체</option><option value="short">숏츠</option><option value="medium">중간</option><option value="long">롱폼</option></select>
                         <input type="number" value={minDurationMin} onChange={e => setMinDurationMin(e.target.value === '' ? '' : Number(e.target.value))} placeholder="Min(분)" style={{flex:1}}/></div>
                     </div>
-                    <div><label style={styles.label}>최소 조회수 / 시간당</label>
+                    <div><label style={styles.label}>최소 조회수 / 시간당 조회수</label>
                         <div style={{display:'flex', gap:'4px'}}><input type="number" value={minViews} onChange={e => setMinViews(Number(e.target.value))}/><input type="number" value={minViewsPerHour} onChange={e => setMinViewsPerHour(Number(e.target.value))}/></div>
                     </div>
                     <div><label style={styles.label}>국가 / 언어</label>
@@ -919,7 +996,7 @@ function App() {
         {currentView === 'results' && (
              <div style={{...styles.resultsContainer, marginLeft: sidebarOpen ? '0' : '40px'}}>
                 <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px'}}>
-                    <h2 style={{margin:0}}>키워드, 채널 검색결과 ({results.length})</h2>
+                    <h2 style={{margin:0}}>검색결과 ({results.length})</h2>
                     <button className="btn btn-success" onClick={() => handleExport(results)} disabled={results.length === 0}>CSV 저장</button>
                 </div>
                 <div style={styles.tabBar}>
